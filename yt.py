@@ -3,7 +3,7 @@ from docx2pdf import convert
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
-TOKEN = "YOUR_BOT_TOKEN_HERE"  # <-- replace with your bot token
+TOKEN = "8334910114:AAGFjoBXLi3XF1hT8DTeXjEmwie2yKJXt7c"  # <-- replace with your bot token
 
 # /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
