@@ -1,52 +1,50 @@
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-from docx import Document
-from fpdf import FPDF
 import os
+from docx2pdf import convert
+from telegram import Update
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
-TOKEN = "8334910114:AAGFjoBXLi3XF1hT8DTeXjEmwie2yKJXt7c"
+TOKEN = "YOUR_BOT_TOKEN_HERE"  # <-- replace with your bot token
 
+# /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Send me a Word file (.docx), and I will convert it to PDF!")
+    await update.message.reply_text(
+        "Send me a .docx file and I will convert it to PDF."
+    )
 
-async def convert_word_to_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.document:
-        await update.message.reply_text("Please send a Word (.docx) file.")
-        return
-
+# Handle Word documents
+async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = update.message.document
     if not file.file_name.endswith(".docx"):
-        await update.message.reply_text("Only .docx files are supported.")
+        await update.message.reply_text("Please send a .docx file.")
         return
 
-    file_path = f"temp_{file.file_name}"
-    await file.get_file().download_to_drive(file_path)
+    file_path = file.file_name
 
-    doc = Document(file_path)
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
+    # Download the file
+    tg_file = await file.get_file()  # await get_file
+    await tg_file.download_to_drive(file_path)  # then download
 
-    for para in doc.paragraphs:
-        text = para.text.strip()
-        if text:
-            pdf.multi_cell(0, 10, text)
-
+    # Convert to PDF
     pdf_path = file_path.replace(".docx", ".pdf")
-    pdf.output(pdf_path)
+    convert(file_path, pdf_path)
 
+    # Send PDF back
     await update.message.reply_document(document=open(pdf_path, "rb"))
 
+    # Cleanup
     os.remove(file_path)
     os.remove(pdf_path)
 
+# Main function
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
+
+    # Handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Document.ALL, convert_word_to_pdf))
-    print("🚀 Bot is running...")
-    app.run_polling()  # <-- Do NOT use asyncio.run() here
+    app.add_handler(MessageHandler(filters.Document.FILE_EXTENSION("docx"), handle_file))
+
+    print("Bot is running...")
+    app.run_polling()  # <-- do NOT use asyncio.run() here
 
 if __name__ == "__main__":
     main()
