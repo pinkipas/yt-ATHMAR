@@ -1,117 +1,155 @@
+# This script creates a Telegram bot that converts Word (.docx) and PowerPoint (.pptx) files to PDF.
+#
+# **Prerequisites:**
+# 1.  A Telegram Bot Token from the @BotFather.
+# 2.  Python library: `python-telegram-bot`
+# 3.  **LibreOffice installed on your system.** This is a critical dependency for the conversion to work.
+# 4.  The `libreoffice` executable must be in your system's PATH.
+#
+# **How to Use:**
+# 1.  Install the required Python library: `pip install python-telegram-bot`
+# 2.  Install LibreOffice on your operating system.
+# 3.  Replace "YOUR_BOT_TOKEN_HERE" with your actual token from @BotFather.
+# 4.  Run this script: `python your_script_name.py`
+#
+# Note: This version uses Python's `subprocess` module to call the LibreOffice command-line tool directly.
+# This makes it more robust than relying on a Python wrapper library.
+
+import os
+import uuid
 import logging
-import requests
-import base64
-import json
-import asyncio
-from telegram import Update, Bot
+import subprocess
+from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# --- Configuration ---
-# You must get these tokens and keys from their respective platforms
-# 1. Telegram Bot Token: Go to @BotFather on Telegram and create a new bot.
-# 2. Gemini API Key: Get this from Google AI Studio. Make sure to enable the necessary APIs.
-YOUR_TELEGRAM_BOT_TOKEN = "8305596005:AAEBWYylaphXzNzIqvs8wEHtaAA3waHIpCs"
-YOUR_GEMINI_API_KEY = "AIzaSyBQ7ISVMmJfu7xu2Y-4qFTYn_igfuWcKLM"
-
-# --- Setup Logging ---
+# Configure logging to see what the bot is doing
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
-logging.getLogger("httpx").setLevel(logging.WARNING)
 
-logger = logging.getLogger(__name__)
+# Replace with your bot token
+BOT_TOKEN = "8305596005:AAEBWYylaphXzNzIqvs8wEHtaAA3waHIpCs"
 
-# --- Gemini API Constants ---
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict"
-GEMINI_API_HEADERS = {
-    "Content-Type": "application/json",
-}
+# Create a temporary directory to store files during conversion
+TEMP_DIR = "temp"
+if not os.path.exists(TEMP_DIR):
+    os.makedirs(TEMP_DIR)
 
-# --- Bot Command Handlers ---
+# --- Command Handlers ---
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a welcome message when the command /start is issued."""
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Greets the user and explains the bot's purpose."""
     await update.message.reply_text(
-        "Hello! I am an image generation bot powered by the Gemini API. "
-        "Send me a description of the image you want to create, and I will generate it for you."
+        "Hello! I'm a file conversion bot. "
+        "Just send me a Word (.docx) or PowerPoint (.pptx) file, "
+        "and I will convert it to a PDF for you."
     )
 
-async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Handles a user's text message, sends the prompt to the Gemini API,
-    and replies with the generated image.
-    """
-    user_prompt = update.message.text
-    if not user_prompt:
-        await update.message.reply_text("Please provide a text description to generate an image.")
+# --- Message Handlers ---
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles incoming documents for conversion."""
+    document = update.message.document
+    filename = document.file_name
+
+    # Check the file extension to determine if it's a supported format
+    file_ext = os.path.splitext(filename)[1].lower()
+    if file_ext not in [".docx", ".pptx"]:
+        await update.message.reply_text(
+            f"Sorry, I can't convert '{file_ext}' files. "
+            "Please send a .docx or .pptx file."
+        )
         return
 
-    await update.message.reply_text("Generating your image... This may take a moment.")
-    logger.info(f"Received prompt from user {update.effective_user.id}: '{user_prompt}'")
+    await update.message.reply_text(
+        f"Received '{filename}'. Please wait while I convert it to a PDF..."
+    )
+
+    # Generate unique filenames to avoid conflicts
+    unique_id = uuid.uuid4().hex
+    input_path = os.path.join(TEMP_DIR, f"{unique_id}_{filename}")
+    output_dir = os.path.join(TEMP_DIR, unique_id)
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Construct the expected output path for the PDF
+    pdf_filename = f"{os.path.splitext(filename)[0]}.pdf"
+    output_path = os.path.join(output_dir, pdf_filename)
 
     try:
-        # Construct the payload for the Gemini API
-        payload = {
-            "instances": {
-                "prompt": user_prompt
-            },
-            "parameters": {
-                "sampleCount": 1
-            }
-        }
+        # Download the file to the temp directory
+        new_file = await context.bot.get_file(document.file_id)
+        await new_file.download_to_drive(input_path)
+
+        # Perform the conversion using the LibreOffice command-line tool
+        command = [
+            "libreoffice",
+            "--headless", # Run without a graphical interface
+            "--convert-to",
+            "pdf",
+            input_path,
+            "--outdir",
+            output_dir
+        ]
         
-        # Add the API key as a query parameter
-        params = {"key": YOUR_GEMINI_API_KEY}
+        # Execute the command and capture the output
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        logging.info(f"LibreOffice conversion output:\n{result.stdout}")
+        
+        # Check if the output file was created
+        if not os.path.exists(output_path):
+            raise FileNotFoundError(f"Conversion failed: PDF file not found at {output_path}")
 
-        # Make the API call to generate the image
-        response = requests.post(
-            GEMINI_API_URL,
-            headers=GEMINI_API_HEADERS,
-            json=payload,
-            params=params
+        # Send the converted PDF back to the user
+        await update.message.reply_document(
+            document=open(output_path, "rb"),
+            filename=pdf_filename,
+            caption=f"Here is your converted PDF for '{filename}'."
         )
-        response.raise_for_status()
 
-        # Parse the response and extract the Base64 image data
-        response_data = response.json()
-        if 'predictions' in response_data and len(response_data['predictions']) > 0:
-            base64_data = response_data['predictions'][0].get('bytesBase64Encoded')
-            if base64_data:
-                # Decode the Base64 data to get the raw image bytes
-                image_bytes = base64.b64decode(base64_data)
-                
-                # Send the photo back to the user
-                await update.message.reply_photo(photo=image_bytes, caption=f"Prompt: {user_prompt}")
-                logger.info("Successfully sent image to user.")
-            else:
-                await update.message.reply_text("Could not find image data in the API response.")
-                logger.error("No Base64 data found in API response.")
-        else:
-            await update.message.reply_text("The API did not return a valid image.")
-            logger.error(f"API response missing predictions: {response_data}")
-
-    except requests.exceptions.HTTPError as http_err:
-        error_message = f"HTTP error occurred: {http_err.response.text}"
-        await update.message.reply_text(f"An API error occurred: {error_message}")
-        logger.error(error_message)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"LibreOffice command failed with exit code {e.returncode}:\n{e.stderr}")
+        await update.message.reply_text(
+            "An error occurred during the conversion. "
+            "Please ensure LibreOffice is installed and in your system's PATH."
+        )
     except Exception as e:
-        await update.message.reply_text("An unexpected error occurred while generating the image.")
-        logger.error(f"An unexpected error occurred: {e}")
+        logging.error(f"Error converting document: {e}")
+        await update.message.reply_text(
+            "An error occurred during the conversion. "
+            "Please try again or check the server logs for more details."
+        )
+    finally:
+        # Clean up temporary files
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        if os.path.exists(output_dir):
+            os.rmdir(output_dir)
 
-# --- Main Function to Run the Bot ---
+async def handle_unsupported_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles messages that are not documents."""
+    await update.message.reply_text(
+        "I can only process Word and PowerPoint files. "
+        "Please send a document with a .docx or .pptx extension."
+    )
+
+# --- Main function to run the bot ---
 
 def main() -> None:
-    """Start the bot."""
-    # Create the Application and pass it your bot's token.
-    application = Application.builder().token(YOUR_TELEGRAM_BOT_TOKEN).build()
+    """Entry point for the bot application."""
+    # Create the Application and pass your bot's token.
+    application = Application.builder().token(BOT_TOKEN).build()
 
-    # Add command and message handlers
+    # Register the command and message handlers
     application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, generate_image))
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    # This handler catches any message that isn't a document
+    application.add_handler(MessageHandler(~filters.Document.ALL, handle_unsupported_message))
 
-    # Run the bot until the user presses Ctrl-C
-    logger.info("Bot is starting...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Start the bot
+    logging.info("Starting bot...")
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
