@@ -1,42 +1,52 @@
-import os
-import asyncio
-from pytube import YouTube
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from docx import Document
+from fpdf import FPDF
+import os
 
-TOKEN = "8334910114:AAGFjoBXLi3XF1hT8DTeXjEmwie2yKJXt7c"  # Replace with your bot token
-
-DOWNLOAD_FOLDER = "downloads"
-os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+TOKEN = "8334910114:AAGFjoBXLi3XF1hT8DTeXjEmwie2yKJXt7c"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hi! Send me a YouTube link and I will download the video for you.")
+    await update.message.reply_text("Send me a Word file (.docx), and I will convert it to PDF!")
 
-async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text
-    await update.message.reply_text("Downloading video... ⏳")
+async def convert_word_to_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.document:
+        await update.message.reply_text("Please send a Word (.docx) file.")
+        return
 
-    try:
-        yt = YouTube(url)
-        stream = yt.streams.get_highest_resolution()
-        file_path = os.path.join(DOWNLOAD_FOLDER, f"{yt.title}.mp4")
-        stream.download(output_path=DOWNLOAD_FOLDER, filename=f"{yt.title}.mp4")
-        
-        await update.message.reply_text("Uploading video... ⏳")
-        await context.bot.send_video(chat_id=update.effective_chat.id, video=open(file_path, 'rb'))
-        os.remove(file_path)  # delete file after sending
+    file = update.message.document
+    if not file.file_name.endswith(".docx"):
+        await update.message.reply_text("Only .docx files are supported.")
+        return
 
-    except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
+    file_path = f"temp_{file.file_name}"
+    await file.get_file().download_to_drive(file_path)
+
+    doc = Document(file_path)
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if text:
+            pdf.multi_cell(0, 10, text)
+
+    pdf_path = file_path.replace(".docx", ".pdf")
+    pdf.output(pdf_path)
+
+    await update.message.reply_document(document=open(pdf_path, "rb"))
+
+    os.remove(file_path)
+    os.remove(pdf_path)
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_video))
-
+    app.add_handler(MessageHandler(filters.Document.ALL, convert_word_to_pdf))
     print("🚀 Bot is running...")
-    asyncio.run(app.run_polling())
+    app.run_polling()  # <-- Do NOT use asyncio.run() here
 
 if __name__ == "__main__":
     main()
